@@ -1,17 +1,41 @@
-from itertools import combinations
+from collections import deque
 import json
+import threading
 
 PATHS = []
 
 
 def get_shortest_paths(graph):
     global PATHS
-    comb = list(combinations(graph.keys(), 2))
-    print("Combinations found. length:", len(comb))
-    for (start, end) in comb:
-        print("Finding shortest paths between", start, "and", end)
-        PATHS.append(shortest_paths(graph, start, end))
-    print("Shortest paths found. length:", len(PATHS))
+    pairs = []
+    keys = list(graph.keys())
+    for i in range(len(keys)):
+        for j in range(i+1, len(keys)):
+            pairs.append((keys[i], keys[j]))
+    print(f"Finding shortest paths for {len(pairs)} pairs")
+
+    # Break the pairs into chunks to run in parallel
+    chunk_size = 10_000
+    chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
+    print(f"Running {len(chunks)} chunks")
+
+    # Run paths finding for each chunk
+
+    def find_paths(graph, pairs, paths):
+        for pair in pairs:
+            paths.append(bfs_shortest_paths(graph, pair[0], pair[1]))
+
+    threads = []
+    for (i, chunk) in enumerate(chunks):
+        print(f"Running chunk {i+1}/{len(chunks)}")
+        thread = threading.Thread(
+            target=find_paths, args=(graph, chunk, PATHS))
+        threads.append(thread)
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+        print(f"Thread {thread} finished")
 
 
 def find_degree_centrality(graph):
@@ -26,11 +50,9 @@ def find_betweenness_centrality(graph):
     # Start by find the shortest paths between all nodes
     # Then, for each node, find the number of shortest paths that pass through it
     if len(PATHS) == 0:
-        print("Finding shortest paths")
         get_shortest_paths(graph)
 
     for node in graph:
-        print("Finding betweenness centrality for node", node)
         nodes[node] = betweenness_centrality(PATHS, node)
 
     return nodes
@@ -41,7 +63,6 @@ def betweenness_centrality(all_paths, node):
     For a given node n, its betweeness centrality is calculated as follows:
       # of shortest paths that pass through n / total # of shortest paths
     '''
-    print(f"======{node}======")
     res = 0
     for paths in all_paths:
         paths = [path for path in paths if node !=
@@ -49,34 +70,47 @@ def betweenness_centrality(all_paths, node):
         if len(paths) == 0:
             continue
         res += (len([p for p in paths if node in p]) / len(paths))
-    # print("Paths that pass through", node, ":", len(paths))
     return res
 
 
-def shortest_paths(graph, start, end):
-    ''' Find all shortest paths between start and end nodes '''
-    paths = []
+def bfs_shortest_paths(graph, start, end):
+    # Check if start and end nodes are valid
+    if start not in graph or end not in graph:
+        raise ValueError("Invalid start or end node")
 
-    def dfs(node, visited: set, path: list = []):
-        if node in visited:
-            return
-        if node == end:
-            paths.append(path+[node])
-            return
+    # Initialize a queue for BFS
+    queue = deque([(start, [start])])
 
-        visited.add(node)
-        for neighbor in graph[node]:
-            dfs(neighbor, visited, path+[node])
-        visited.remove(node)
+    # Initialize a set to keep track of visited nodes
+    visited = set()
 
-    dfs(start, set())
-    # print(f"paths from {start} to {end}: {paths}")
-    # print(f"paths found: {len(paths)}")
-    min_path_length = min([len(path) for path in paths])
-    # print(f"min path length: {min_path_length}")
-    paths = [path for path in paths if len(path) == min_path_length]
-    # print(f"min path length paths: {len(paths)}")
-    return paths
+    # Initialize the minimum path length
+    min_path_length = float('inf')
+
+    # Initialize a list to store all shortest paths
+    shortest_paths = []
+
+    while queue:
+        current_node, path = queue.popleft()
+
+        # Mark the current node as visited
+        visited.add(current_node)
+
+        # Check if the current node is the destination
+        if current_node == end:
+            # Update minimum path length
+            min_path_length = min(min_path_length, len(path))
+            # Add the path to the list if it is a shortest path
+            if len(path) == min_path_length:
+                shortest_paths.append(path)
+            continue
+
+        # Enqueue neighbors of the current node
+        for neighbor in graph[current_node]:
+            if neighbor not in visited:
+                queue.append((neighbor, path + [neighbor]))
+
+    return shortest_paths
 
 
 def find_closeness_centrality(graph):
@@ -84,9 +118,7 @@ def find_closeness_centrality(graph):
     To find the closeness centrality of a node, we need to calculate the mean length of all shortest paths from the node to all other nodes.
     '''
     if len(PATHS) == 0:
-        print("Finding shortest paths")
         get_shortest_paths(graph)
-        print(PATHS)
     cc = {}
     for node in graph:
         cc[node] = closeness_centrality(graph, node, PATHS)
@@ -101,8 +133,7 @@ def closeness_centrality(graph, node, all_paths):
         paths = [path for path in paths if node == path[0] or node == path[-1]]
         if len(paths) == 0:
             continue
-        print(paths)
-        res += sum([len(path)-1 for path in paths])
+        res += len(paths[0]) - 1
     return round(1 / (res / (len(graph.keys())-1)), 2)
 
 
@@ -129,9 +160,13 @@ def clustering_coefficient(graph, node):
     return round(existing_connections / possible_connections, 2)
 
 
-def read_json(graph: dict):
-    with open("input.json", "r", encoding="utf-8") as file:
+def read_json(graph: dict, file: str):
+    with open(file, "r", encoding="utf-8") as file:
         obj = json.load(file)
+        nodes = dict()
+        for node in obj["nodes"]:
+            nodes[node["key"]] = node["attributes"]["label"]
+
         for edge in obj["edges"]:
             from_node = edge["source"]
             to_node = edge["target"]
@@ -141,10 +176,11 @@ def read_json(graph: dict):
                 graph[to_node] = set()
             graph[from_node].add(to_node)
             graph[to_node].add(from_node)
+        return nodes
 
 
-def read_adjacency_list(graph: dict):
-    with open("input2.txt", "r", encoding="utf-8") as file:
+def read_adjacency_list(graph: dict, file: str):
+    with open(file, "r", encoding="utf-8") as file:
         '''
         Format of input file:
         {Node} - [Node1, Node2, ...]
@@ -175,13 +211,24 @@ def read_adjacency_list(graph: dict):
 def main():
     # Read the file
     graph = {}
+    nodes = {}
 
     args = sys.argv
-    print(args)
-    if len(args) > 1 and args[1] == "--json":
-        read_json(graph)
+    if len(args) < 2:
+        print("Usage: python main.py <input_file>")
+        return
+    elif args[1].endswith(".json"):
+        nodes = read_json(graph, args[1])
+    elif args[1].endswith(".txt"):
+        read_adjacency_list(graph, args[1])
+        nodes = {node: str(node) for node in graph}
     else:
-        read_adjacency_list(graph)
+        print("Invalid input file format: must be .json or .txt")
+        return
+
+    print("Finding shortest paths...")
+    get_shortest_paths(graph)
+    print("Shortest paths found")
 
     # Main loop
     while True:
@@ -195,35 +242,35 @@ def main():
         choice = input(">>> ")
         if choice == "1":
             print("Degree Centrality:")
-            nodes = find_degree_centrality(graph)
-            nodes = sorted(nodes.items(), key=lambda x: x[1], reverse=True)
-            print_table(nodes)
+            dc = find_degree_centrality(graph)
+            dc = sorted(dc.items(), key=lambda x: x[1], reverse=True)
+            print_table(dc, nodes)
         elif choice == "2":
             print("Betweenness Centrality:")
-            nodes = find_betweenness_centrality(graph)
-            nodes = sorted(nodes.items(), key=lambda x: x[1], reverse=True)
-            print_table(nodes)
+            bc = find_betweenness_centrality(graph)
+            bc = sorted(bc.items(), key=lambda x: x[1], reverse=True)
+            print_table(bc, nodes)
         elif choice == "3":
             print("Closeness Centrality:")
-            nodes = find_closeness_centrality(graph)
-            nodes = sorted(nodes.items(), key=lambda x: x[1], reverse=True)
-            print_table(nodes)
+            cc = find_closeness_centrality(graph)
+            cc = sorted(cc.items(), key=lambda x: x[1], reverse=True)
+            print_table(cc, nodes)
         elif choice == "4":
             print("Clustering Coefficient:")
-            nodes = find_clustering_coefficient(graph)
-            nodes = sorted(nodes.items(), key=lambda x: x[1], reverse=True)
-            print_table(nodes)
+            cc = find_clustering_coefficient(graph)
+            cc = sorted(cc.items(), key=lambda x: x[1], reverse=True)
+            print_table(cc, nodes)
         elif choice == "5":
             break
         else:
             print("Invalid choice")
 
 
-def print_table(data):
+def print_table(data, node_names):
     print(f"{'Index':^10}{'Node':^10}{'Value':^10}")
     print('-' * 30)
     for (i, node) in enumerate(data):
-        print(f"{i+1:^10}{node[0]:^10}{node[1]:^10}")
+        print(f"{i+1:^10}{node_names[node[0]]:^10}{node[1]:^10}")
 
 
 if __name__ == "__main__":
