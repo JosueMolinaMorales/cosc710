@@ -3,7 +3,7 @@ import json
 import os
 import networkx as nx
 
-
+print("connec.")
 connection = mysql.connector.connect(
     host="localhost",
     user="root",
@@ -104,3 +104,7 @@ for suggestion, comments in suggestion_comments.items():
     #     break
 
 nx.write_gexf(G, "suggestions_comments.gexf")
+
+
+if __name__ == "__name__":
+    main()
